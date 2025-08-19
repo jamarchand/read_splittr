@@ -21,6 +21,8 @@ from Bio.Seq import Seq
 import argparse
 import logging
 import re
+import matplotlib.pyplot as plt
+import numpy as np
 
 # =============================================================================
 # TUNABLE PARAMETERS - Modify these as needed
@@ -59,6 +61,7 @@ FILTER_PARAMS = {
 DEBUG_PARAMS = {
     'save_blast_outputs': False,  # Save BLAST output files for debugging
     'verbose': False,  # Print detailed output for each operation
+    'plot_read_lengths': False,  # Generate read length histograms
 }
 
 # =============================================================================
@@ -71,7 +74,7 @@ logger = logging.getLogger(__name__)
 
 class ReadFilterAndSplitter:
     def __init__(self, input_file, primer_file, output_dir, min_length=None, max_length=None, 
-                 save_blast_outputs=None, verbose=None):
+                 save_blast_outputs=None, verbose=None, plot_read_lengths=None):
         """
         Initialize the filter and splitter with input files and parameters.
         
@@ -93,6 +96,7 @@ class ReadFilterAndSplitter:
         self.max_length = max_length if max_length is not None else FILTER_PARAMS['max_length']
         self.save_blast_outputs = save_blast_outputs if save_blast_outputs is not None else DEBUG_PARAMS['save_blast_outputs']
         self.verbose = verbose if verbose is not None else DEBUG_PARAMS['verbose']
+        self.plot_read_lengths = plot_read_lengths if plot_read_lengths is not None else DEBUG_PARAMS['plot_read_lengths']
         
         # Use parameters from the top of the script
         self.blast_params = BLAST_PARAMS.copy()
@@ -452,6 +456,9 @@ class ReadFilterAndSplitter:
             # Generate summary report
             self._write_summary_report(categories, output_files)
             
+            # Generate read length plots if requested
+            self._plot_read_lengths(output_files)
+            
             logger.info("Processing completed successfully")
             return output_files
             
@@ -516,6 +523,72 @@ class ReadFilterAndSplitter:
                 f.write(f"  {category}: {filepath}\n")
         
         logger.info(f"Summary report written to: {report_file}")
+    
+    def _plot_read_lengths(self, output_files):
+        """Generate histograms of read lengths for each output file."""
+        if not self.plot_read_lengths:
+            return
+        
+        logger.info("Generating read length histograms...")
+        
+        # Set up the plotting style
+        plt.style.use('default')
+        
+        for category, filepath in output_files.items():
+            if not filepath.exists() or filepath.stat().st_size == 0:
+                logger.debug(f"Skipping empty file: {filepath}")
+                continue
+            
+            try:
+                # Read sequences and calculate lengths
+                lengths = []
+                for record in SeqIO.parse(filepath, 'fasta'):
+                    lengths.append(len(record.seq))
+                
+                if not lengths:
+                    logger.debug(f"No reads found in {filepath}")
+                    continue
+                
+                # Create the plot
+                fig, ax = plt.subplots(figsize=(10, 6))
+                
+                # Create histogram
+                n, bins, patches = ax.hist(lengths, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
+                
+                # Add statistics
+                mean_length = np.mean(lengths)
+                median_length = np.median(lengths)
+                min_length = np.min(lengths)
+                max_length = np.max(lengths)
+                
+                # Add vertical lines for mean and median
+                ax.axvline(mean_length, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_length:.1f}')
+                ax.axvline(median_length, color='orange', linestyle='--', linewidth=2, label=f'Median: {median_length:.1f}')
+                
+                # Customize the plot
+                ax.set_xlabel('Read Length (bp)', fontsize=12)
+                ax.set_ylabel('Number of Reads', fontsize=12)
+                ax.set_title(f'Read Length Distribution: {category}\n({len(lengths)} reads)', fontsize=14, fontweight='bold')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                
+                # Add text box with statistics
+                stats_text = f'Total reads: {len(lengths)}\nMin length: {min_length}\nMax length: {max_length}\nMean length: {mean_length:.1f}\nMedian length: {median_length:.1f}'
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
+                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+                
+                # Save the plot
+                plot_filename = f"{category}_read_lengths.pdf"
+                plot_path = self.output_dir / plot_filename
+                plt.tight_layout()
+                plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+                plt.close()
+                
+                logger.info(f"Generated read length plot: {plot_path}")
+                
+            except Exception as e:
+                logger.error(f"Error generating plot for {filepath}: {e}")
+                continue
 
 
 def main():
@@ -528,6 +601,7 @@ Examples:
   python read_filter_and_split.py input.fasta primers.fasta output_dir
   python read_filter_and_split.py input.fasta primers.fasta output_dir --min-length 1000 --max-length 5000
   python read_filter_and_split.py input.fasta primers.fasta output_dir --verbose --save-blast-outputs
+  python read_filter_and_split.py input.fasta primers.fasta output_dir --plot-read-lengths
         """
     )
     
@@ -543,6 +617,7 @@ Examples:
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     parser.add_argument('--verbose', action='store_true', help='Print detailed output')
     parser.add_argument('--save-blast-outputs', action='store_true', help='Save BLAST output files for debugging')
+    parser.add_argument('--plot-read-lengths', action='store_true', help='Generate read length histograms for output files')
     
     args = parser.parse_args()
     
@@ -560,7 +635,8 @@ Examples:
             min_length=args.min_length,
             max_length=args.max_length,
             save_blast_outputs=args.save_blast_outputs,
-            verbose=args.verbose
+            verbose=args.verbose,
+            plot_read_lengths=args.plot_read_lengths
         )
         
         # Update parameters if provided via command line
